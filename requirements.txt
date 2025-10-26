@@ -1,0 +1,19 @@
+# Core Frameworks
+streamlit
+langgraph
+
+# LangChain & API Clients
+langchain
+langchain_core
+langchain_huggingface # For ChatHuggingFace
+huggingface_hub       # Dependency for langchain_huggingface
+tavily-python       # Teammate's web search tool
+
+# Text & Data Processing
+PyMuPDF             # PDF text extraction
+scikit-learn        # FOR AST-based TF-IDF comparison
+javalang            # Java AST Parser (Simple, pip-installable)
+
+# Utilities
+python-dotenv       # To load .env file for local development
+streamlit
