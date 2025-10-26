@@ -1,25 +1,25 @@
-# In: app.py (Gradio Version)
+# In: app.py (Corrected Theme - Full Width Inputs)
 
 import gradio as gr
 import os
 from dotenv import load_dotenv
+import time # For slight delay simulation if needed
 
 # --- Load Environment Variables ---
 if os.path.exists(".env"):
     load_dotenv()
 
 HF_TOKEN = os.environ.get("HF_TOKEN")
-TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY") # Needed by AI-TA graph
 
 # --- Import Compiled Graphs ---
-# Wrap imports in try-except (important for Gradio launch)
 graphs_imported = False
 plagiarism_app = None
 ai_ta_app = None
 combined_app = None
 
 try:
-    if HF_TOKEN: # Check if the token is loaded
+    if HF_TOKEN:
         from src.graph_plagiarism import plagiarism_app
         from src.graph_ai_ta import ai_ta_app
         from src.graph_combined import combined_app
@@ -37,73 +37,78 @@ def process_gradio_files(uploaded_files):
     """Converts Gradio File objects/list to the format graphs expect."""
     if not uploaded_files:
         return []
-    
-    # Gradio might return a single file object or a list
     if not isinstance(uploaded_files, list):
         uploaded_files = [uploaded_files]
-        
     files_input_list = []
     for temp_file in uploaded_files:
         try:
-            # temp_file.name has the full path in Gradio, we just need the filename
             filename = os.path.basename(temp_file.name)
-            # Read bytes from the temporary file path
+            # Gradio temp files need to be read from their path
             with open(temp_file.name, 'rb') as f:
                 content_bytes = f.read()
-            
-            files_input_list.append({
-                "name": filename,
-                "content": content_bytes
-            })
+            files_input_list.append({"name": filename, "content": content_bytes})
         except Exception as e:
-            print(f"Error processing uploaded file {temp_file.name}: {e}")
-            
+            # Provide specific error if file path is missing (can happen with Gradio state)
+            file_path = getattr(temp_file, 'name', 'N/A')
+            print(f"Error processing uploaded file '{file_path}': {e}")
     return files_input_list
 
-# --- Functions to Wrap Graph Invocations ---
 
-def run_plagiarism_check(files_list, run_ast, run_ai):
-    """Wrapper for the plagiarism graph."""
+# --- Functions to Wrap Graph Invocations (with Progress) ---
+def run_plagiarism_check(files_list, run_ast, run_ai, progress=gr.Progress(track_tqdm=True)):
+    """Wrapper for the plagiarism graph with progress."""
+    progress(0, desc="Starting Plagiarism Check...")
     if not graphs_imported or not plagiarism_app:
-        return "Error: Plagiarism check service not available."
+        return "**Error:** Plagiarism check service not available."
     if not files_list:
-        return "Please upload files to check."
-        
+        return "**Warning:** Please upload files to check for plagiarism."
+
+    progress(0.1, desc="Processing uploaded files...")
     files_input = process_gradio_files(files_list)
-    if not files_input:
-         return "Error processing uploaded files."
+    if not files_input and files_list: # Check if processing failed
+         return "**Error:** Could not process uploaded files."
+    elif not files_input: # No files uploaded initially
+        return "**Warning:** Please upload files to check for plagiarism."
+
 
     plag_input_state = {
         "files_input": files_input,
         "run_ast_check_input": run_ast,
         "run_ai_check_input": run_ai
     }
-    
+
+    report = "**Error:** Analysis failed." # Default error message
     try:
-        # Show progress (Gradio handles this nicely)
-        yield "Analyzing files for plagiarism... This may take a moment."
+        progress(0.3, desc="Running plagiarism analysis...")
+        # Invoke might take time
         plag_result_state = plagiarism_app.invoke(plag_input_state)
-        yield plag_result_state.get("final_plagiarism_report", "Error generating report.")
+        progress(1.0, desc="Analysis Complete.")
+        report = plag_result_state.get("final_plagiarism_report", "**Error:** Failed to generate report.")
     except Exception as e:
-        yield f"An error occurred: {e}"
+        progress(1.0)
+        print(f"Plagiarism Check Error: {e}") # Log detailed error
+        report = f"**An error occurred during analysis:** {str(e)}"
 
-def run_ai_ta_feedback(problem_statement, code_files_list, doc_files_list):
-    """Wrapper for the AI-TA feedback graph."""
+    return report # Return the final string report
+
+def run_ai_ta_feedback(problem_statement, code_files_list, doc_files_list, progress=gr.Progress(track_tqdm=True)):
+    """Wrapper for the AI-TA feedback graph with progress updates."""
+    progress(0, desc="Starting Feedback Generation...")
     if not graphs_imported or not ai_ta_app:
-        return "Error: Feedback service not available."
+        return "**Error:** Feedback service not available."
     if not problem_statement:
-        return "Please enter your problem statement or goal."
+        return "**Warning:** Please enter problem statement."
     if not code_files_list and not doc_files_list:
-        return "Please upload at least one code file or document."
+        return "**Warning:** Please upload at least one file."
 
+    progress(0.1, desc="Processing files...")
     code_files_input = process_gradio_files(code_files_list)
     doc_files_input = process_gradio_files(doc_files_list)
-    # Check if processing failed for all files
-    if code_files_list and not code_files_input:
-         return "Error processing code files."
-    if doc_files_list and not doc_files_input:
-         return "Error processing document files."
 
+    if code_files_list and not code_files_input:
+         return "**Error:** Processing code files failed."
+    if doc_files_list and not doc_files_input:
+         return "**Error:** Processing document files failed."
 
     aita_input_state = {
         "problem_statement": problem_statement,
@@ -111,28 +116,36 @@ def run_ai_ta_feedback(problem_statement, code_files_list, doc_files_list):
         "doc_files_input": doc_files_input
     }
 
+    report = "**Error:** Feedback generation failed."
     try:
-        yield "Generating feedback... This may take some time depending on file size and web search."
+        progress(0.3, desc="Generating feedback (may include web search)...")
         aita_result_state = ai_ta_app.invoke(aita_input_state)
-        yield aita_result_state.get("final_review", "Error generating feedback.")
+        progress(1.0, desc="Feedback Ready.")
+        report = aita_result_state.get("final_review", "**Error:** Failed to generate feedback report.")
     except Exception as e:
-        yield f"An error occurred: {e}"
+        progress(1.0)
+        print(f"AI-TA Feedback Error: {e}")
+        report = f"**An error occurred during feedback generation:** {str(e)}"
 
-def run_combined_report(problem_statement, code_files_list, doc_files_list):
-    """Wrapper for the combined report graph."""
+    return report
+
+def run_combined_report(problem_statement, code_files_list, doc_files_list, progress=gr.Progress(track_tqdm=True)):
+    """Wrapper for the combined report graph with progress updates."""
+    progress(0, desc="Starting Combined Report...")
     if not graphs_imported or not combined_app:
-        return "Error: Combined report service not available."
+        return "**Error:** Combined report service not available."
     if not problem_statement:
-        return "Please enter your problem statement or goal."
+        return "**Warning:** Please enter problem statement."
     if not code_files_list and not doc_files_list:
-        return "Please upload at least one code file or document."
+        return "**Warning:** Please upload at least one file."
 
+    progress(0.1, desc="Processing files...")
     code_files_input = process_gradio_files(code_files_list)
     doc_files_input = process_gradio_files(doc_files_list)
     if code_files_list and not code_files_input:
-         return "Error processing code files."
+         return "**Error:** Processing code files failed."
     if doc_files_list and not doc_files_input:
-         return "Error processing document files."
+         return "**Error:** Processing document files failed."
 
     comb_input_state = {
         "problem_statement": problem_statement,
@@ -140,91 +153,194 @@ def run_combined_report(problem_statement, code_files_list, doc_files_list):
         "doc_files_input": doc_files_input
     }
 
+    report = "**Error:** Combined report generation failed."
     try:
-        yield "Generating combined report... This involves multiple checks and may take longer."
+        progress(0.3, desc="Running combined analysis (plagiarism & feedback)...")
         comb_result_state = combined_app.invoke(comb_input_state)
-        yield comb_result_state.get("final_combined_report", "Error generating combined report.")
+        progress(1.0, desc="Combined Report Generated.")
+        report = comb_result_state.get("final_combined_report", "**Error:** Failed to generate combined report.")
     except Exception as e:
-        yield f"An error occurred: {e}"
+        progress(1.0)
+        print(f"Combined Report Error: {e}")
+        report = f"**An error occurred during combined report generation:** {str(e)}"
 
+    return report
 
 # --- Gradio Interface Definition using Blocks ---
+# Use a custom dark theme with orange accents and Calibri font
+# Use a custom dark theme with orange accents and Calibri font
+custom_theme = gr.themes.Default(
+    primary_hue="orange",
+    secondary_hue="neutral",
+    font=[gr.themes.GoogleFont("Calibri"), "ui-sans-serif", "system-ui", "sans-serif"]
+).set(
+    # --- Dark Mode Overrides ---
+    # Backgrounds
+    body_background_fill_dark="#1A1A1A",
+    block_background_fill_dark="#2A2A2A",
+    input_background_fill_dark="#3A3A3A",
 
-with gr.Blocks(theme=gr.themes.Soft()) as demo:
-    gr.Markdown("# 📚 AI-Powered Peer Review Platform")
+    # Text Colors
+    body_text_color_dark="white",
+    block_label_text_color_dark="white",
+    block_title_text_color_dark="white",
+    input_placeholder_color_dark="#A0A0A0",
+    link_text_color_dark="#FFA500", # Orange links
 
-    # Check for Initialization Errors
+    # Borders and Accents
+    border_color_accent_dark="#FFA500",      # Orange border
+    color_accent_soft_dark="#FFCC80",        # Lighter orange
+
+    # Button Colors
+    button_primary_background_fill_dark="#FFA500",
+    button_primary_text_color_dark="black",
+    button_secondary_background_fill_dark="#4A4A4A",
+    button_secondary_text_color_dark="white",
+)
+
+with gr.Blocks(theme=custom_theme) as demo:
+
+    gr.Markdown(
+        """
+        # AI-Powered Peer Review Platform
+        *Get insights into academic integrity and receive constructive feedback.*
+        """
+    )
+    gr.HTML("<hr style='border-color: #4A4A4A;'>") # Separator matching dark theme
+
+    # Check for Initialization Errors at the top
     if not graphs_imported or not HF_TOKEN:
-         gr.Markdown("## ⚠️ Application Initialization Failed")
-         gr.Markdown("Could not load API keys or initialize backend graphs. Please check logs and environment configuration.")
+         gr.Markdown("## Application Initialization Failed")
+         gr.Markdown(
+             "**Error:** Could not load API keys or initialize backend graphs. "
+             "Please ensure `HF_TOKEN` is set correctly and restart the application. Check console logs for details."
+         )
     else:
         # --- Define Tabs ---
         with gr.Tabs():
+
             # --- Tab 1: Plagiarism Checker ---
             with gr.TabItem("Plagiarism Checker"):
-                gr.Markdown("Upload multiple files (code, PDF, TXT) to check for similarities.")
-                with gr.Row():
+                gr.Markdown("### Detect Structural and Semantic Plagiarism")
+                gr.Markdown("Upload code (Python, Java), PDF, or TXT files. Select analysis types.")
+
+                with gr.Column():
                     plag_files_input = gr.File(
                         label="Upload Files (Code, PDF, TXT)",
                         file_count="multiple",
-                        # Specify allowed types if desired, None allows all
-                        # file_types=['.py', '.java', '.c', '.cpp', '.h', '.txt', '.pdf']
                     )
-                with gr.Row():
-                    plag_ast_check = gr.Checkbox(label="Run Structural Check (AST - for Python/Java Code, needs 2+)", value=True)
-                    plag_ai_check = gr.Checkbox(label="Run Semantic / AI-Gen Check (LLM - max 4 files)", value=True)
-                plag_button = gr.Button("Check Plagiarism")
-                plag_output = gr.Markdown(label="Plagiarism Report") # Use Markdown for formatted output
+                    with gr.Row():
+                         plag_ast_check = gr.Checkbox(
+                            label="Structural Check (AST)",
+                            value=True,
+                            info="Python/Java structure (needs 2+)"
+                        )
+                         plag_ai_check = gr.Checkbox(
+                            label="Semantic Check (AI)",
+                            value=True,
+                            info="Deep analysis via LLM (max 4 files)"
+                        )
+                    plag_button = gr.Button("Check Plagiarism", variant="primary", size="lg")
+
+                gr.HTML("<hr style='border-color: #4A4A4A;'>")
+                with gr.Column():
+                    plag_output = gr.Markdown(
+                        label="Plagiarism Report",
+                        value="*Upload files, select checks, and click button...*",
+                    )
 
                 plag_button.click(
                     fn=run_plagiarism_check,
                     inputs=[plag_files_input, plag_ast_check, plag_ai_check],
-                    outputs=plag_output
+                    outputs=plag_output,
+                    show_progress="full"
                 )
 
             # --- Tab 2: AI-TA Feedback ---
             with gr.TabItem("AI-TA Feedback"):
-                gr.Markdown("Get constructive feedback on your code and/or documents based on your goal.")
-                aita_problem_input = gr.Textbox(label="1. Enter your Problem Statement or Goal (Required)", lines=3)
-                with gr.Row():
-                    aita_code_input = gr.File(label="2. Upload Code Files (Optional)", file_count="multiple") # file_types=['.py', '.java', '.c', '.cpp', '.h'])
-                    aita_doc_input = gr.File(label="3. Upload Documents (Optional, PDF/TXT)", file_count="multiple") # file_types=['.pdf', '.txt'])
-                aita_button = gr.Button("Generate Feedback")
-                aita_output = gr.Markdown(label="Feedback Report")
+                gr.Markdown("### Get AI-Powered Feedback")
+                gr.Markdown("Receive detailed feedback on code and/or documents based on your goal. Web search may be used for documents.")
+
+                with gr.Column():
+                    aita_problem_input = gr.Textbox(
+                        label="Problem Statement / Goal (Required)",
+                        placeholder="Describe the assignment or project goal...",
+                        lines=4
+                    )
+                    with gr.Row():
+                         aita_code_input = gr.File(
+                            label="Code Files (Optional)",
+                            file_count="multiple"
+                        )
+                         aita_doc_input = gr.File(
+                            label="Documents (Optional, PDF/TXT)",
+                            file_count="multiple",
+                            file_types=['.pdf', '.txt']
+                        )
+                    aita_button = gr.Button("Generate Feedback", variant="primary", size="lg")
+
+                gr.HTML("<hr style='border-color: #4A4A4A;'>")
+                with gr.Column():
+                     aita_output = gr.Markdown(
+                         label="Feedback Report",
+                         value="*Enter goal and upload files to get feedback...*"
+                     )
 
                 aita_button.click(
                     fn=run_ai_ta_feedback,
                     inputs=[aita_problem_input, aita_code_input, aita_doc_input],
-                    outputs=aita_output
+                    outputs=aita_output,
+                    show_progress="full"
                 )
 
             # --- Tab 3: Combined Report ---
             with gr.TabItem("Combined Report"):
-                gr.Markdown("Get a unified report including AI-driven plagiarism analysis and feedback.")
-                comb_problem_input = gr.Textbox(label="1. Enter your Problem Statement or Goal (Required)", lines=3)
-                with gr.Row():
-                    comb_code_input = gr.File(label="2. Upload Code Files (Optional)", file_count="multiple")
-                    comb_doc_input = gr.File(label="3. Upload Documents (Optional, PDF/TXT)", file_count="multiple")
-                comb_button = gr.Button("Generate Combined Report")
-                comb_output = gr.Markdown(label="Combined Student Report")
+                gr.Markdown("### Generate a Comprehensive Report")
+                gr.Markdown("Get a unified report including AI-driven plagiarism analysis (semantic only) and feedback.")
+
+                with gr.Column():
+                    comb_problem_input = gr.Textbox(
+                        label="Problem Statement / Goal (Required)",
+                        placeholder="Describe the assignment or project goal...",
+                        lines=4
+                    )
+                    with gr.Row():
+                        comb_code_input = gr.File(
+                            label="Code Files (Optional)",
+                            file_count="multiple"
+                        )
+                        comb_doc_input = gr.File(
+                            label="Documents (Optional, PDF/TXT)",
+                            file_count="multiple",
+                            file_types=['.pdf', '.txt']
+                        )
+                    comb_button = gr.Button("Generate Combined Report", variant="primary", size="lg")
+
+                gr.HTML("<hr style='border-color: #4A4A4A;'>")
+                with gr.Column():
+                    comb_output = gr.Markdown(
+                        label="Combined Report",
+                        value="*Enter goal and upload files for the full report...*"
+                    )
 
                 comb_button.click(
                     fn=run_combined_report,
                     inputs=[comb_problem_input, comb_code_input, comb_doc_input],
-                    outputs=comb_output
+                    outputs=comb_output,
+                    show_progress="full"
                 )
 
 # --- Launch the Gradio App ---
 if __name__ == "__main__":
     if graphs_imported and HF_TOKEN:
-        print("Launching Gradio App...")
-        # Share=True creates a public link (useful for testing/sharing temporarily)
-        # Set debug=True for more detailed error logs during development
-        demo.launch(share=False, debug=True)
+        print("Launching Gradio App (Dark Orange Theme)...")
+        demo.launch(share=False, debug=True, show_error=True, inbrowser=True)
     else:
         print("ERROR: Cannot launch Gradio app due to initialization failures.")
-        # Optionally, launch a simple error message app
         with gr.Blocks() as error_demo:
-            gr.Markdown("# ⚠️ Application Initialization Failed")
-            gr.Markdown("Could not load API keys or initialize backend graphs. Please check logs and environment configuration.")
-        error_demo.launch()
+             gr.Markdown("## Application Initialization Failed")
+             gr.Markdown(
+                 "**Error:** Could not load API keys or initialize backend graphs. "
+                 "Please ensure `HF_TOKEN` is set in your `.env` file and restart. Check console logs for details."
+             )
+        error_demo.launch(inbrowser=True)

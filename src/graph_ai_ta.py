@@ -42,7 +42,7 @@ try:
     llm_endpoint = HuggingFaceEndpoint(
         repo_id=LLM_REPO_ID,
         huggingfacehub_api_token=HF_TOKEN,
-        max_new_tokens=1500, # Allow longer feedback
+        max_new_tokens=2048, # Increased for detailed feedback
         temperature=0.1 # Slightly creative but mostly factual
     )
     chat_model = ChatHuggingFace(llm=llm_endpoint)
@@ -179,7 +179,7 @@ def agentic_web_search_node(state: ReviewState) -> dict:
 
 
 def final_feedback_node(state: ReviewState) -> dict:
-    """Generates the final feedback using all gathered context."""
+    """Generates the final feedback using all gathered context with detailed grading."""
     print("---AI-TA: Generating Final Feedback---")
     if not chat_model or not parser:
         return {"final_review": "Error: LangChain Chat Model not initialized."}
@@ -189,45 +189,87 @@ def final_feedback_node(state: ReviewState) -> dict:
     doc_text = state.get("aggregated_doc_text", "")
     web_results = state.get("web_search_results", "") # Will exist even if skipped
 
-    # --- Build the Final Prompt ---
+    # --- Build the Enhanced System Prompt ---
+    system_prompt = """You are an AI grader and feedback generator for student submissions, which may be either text (project write-ups) or code.
+
+For each submission, you must provide a comprehensive analysis covering:
+
+1. **Relevance**: Assess whether the submission content is relevant to the assignment/question. State "Relevant", "Partially Relevant", or "Not Relevant" and explain why.
+
+2. **Pros**: List key strengths of the submission. For documents: focus on clarity, logic, methodology, proper use of formulas/expressions, data presentation. For code: focus on correctness, structure, efficiency, good practices.
+
+3. **Cons**: List key weaknesses or issues. For documents: identify incorrect formulas, flawed methodology, missing data, logical fallacies. For code: identify bugs, inefficiencies, poor practices, errors.
+
+4. **Clarity**: Evaluate overall clarity. Rate as "High", "Medium", or "Low" and justify your rating.
+
+5. **Technical Accuracy**: 
+   - For documents: Verify correctness of formulas, mathematical expressions, numerical data, methodology, and theoretical foundations
+   - For code: Check algorithm correctness, logic errors, implementation issues
+
+6. **Methodology & Numbers**: 
+   - Analyze the methodology used (if applicable)
+   - Examine numerical data, calculations, and statistical measures
+   - Verify if numbers/metrics make sense in context
+   - Check if data presentation is appropriate
+
+7. **Scope of Implementability**: Assess how practical and feasible the proposed solution/approach is in real-world scenarios.
+
+8. **Improvements**: Provide specific, actionable suggestions for enhancement. Be detailed and constructive.
+
+Generate your feedback in the following format:
+---
+**Relevance**: [Relevant/Partially Relevant/Not Relevant - with explanation]
+
+**Pros**: 
+- [List main strengths with details]
+
+**Cons**: 
+- [List main weaknesses with details]
+
+**Clarity**: [High/Medium/Low - with justification]
+
+**Technical Accuracy**:
+- [Analysis of formulas, expressions, methodology, or code correctness]
+
+**Methodology & Numbers**:
+- [Detailed analysis of approach, numerical data, calculations if present]
+
+**Scope of Implementability**: [Assessment of practical feasibility]
+
+**Improvements**: 
+- [Specific, actionable suggestions numbered 1, 2, 3, etc.]
+
+**Overall Summary**: [3-5 sentences providing holistic feedback]
+---
+
+Be thorough, constructive, and detailed. Cover everything in the submission."""
+
+    # --- Build the User Prompt ---
     prompt_sections = [
-        "You are a helpful and constructive AI Teaching Assistant providing feedback. "
-        "Your goal is to give clear, actionable advice based on the user's submission "
-        "and their stated goal."
-        "\n\n**Formatting Instructions:**\n"
-        "- Use **bold text** for section titles (e.g., '**Overall Goal Alignment**').\n"
-        "- Do NOT use markdown headings (like '##' or '###').\n"
-        "- Use standard paragraphs and bullet points.\n"
-        "- Be encouraging but honest."
-        f"\n\n**1. User's Goal:**\n{problem}"
+        f"**Assignment/Question**: {problem}\n"
     ]
 
     if code_text:
-        prompt_sections.append(f"**2. Submitted Code:**\n{code_text}")
+        prompt_sections.append(f"**Submitted Code**:\n{code_text}\n")
 
     if doc_text:
-        prompt_sections.append(f"**3. Submitted Document(s):**\n{doc_text}")
+        prompt_sections.append(f"**Submitted Document(s)**:\n{doc_text}\n")
 
     # Include web results only if a search was actually performed and yielded results
     if web_results and "Error" not in web_results and "unnecessary" not in web_results and "skipped" not in web_results:
-         prompt_sections.append(f"**4. Relevant Web Context:**\n{web_results}")
+         prompt_sections.append(f"**Additional Web Context**:\n{web_results}\n")
 
-    prompt_sections.append(
-        "\n\n**Your Task:**\n"
-        "Based on *all* the information above, provide a comprehensive feedback report. Address the following points clearly using the specified bold headings:\n"
-        "- **Overall Goal Alignment:** Does the submission (code and/or documents) successfully address the user's stated goal? Is it complete?\n"
-        "- **Strengths:** What aspects of the submission are well done? (e.g., clear logic, good code structure, well-written document sections)\n"
-        "- **Areas for Improvement:** What are the main weaknesses or errors? (e.g., bugs in code, logical fallacies in document, incorrect information, missing components). Be specific.\n"
-        "- **Suggestions:** Provide 1-3 concrete, actionable suggestions for how the user can improve their work."
-    )
-
-    final_user_prompt = "\n\n".join(prompt_sections)
-    # -----------------------------
+    user_prompt = "\n".join(prompt_sections)
 
     try:
-        chain = chat_model | parser
-        messages = build_mistral_chat_prompt(final_user_prompt)
-        feedback = chain.invoke(messages)
+        # Use ChatPromptTemplate for proper system/user message handling
+        feedback_prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("human", "{submission}")
+        ])
+        
+        chain = feedback_prompt | chat_model | parser
+        feedback = chain.invoke({"submission": user_prompt})
         return {"final_review": feedback}
     except Exception as e:
         print(f"Error during final feedback generation: {e}")

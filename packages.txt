@@ -1,8 +1,0 @@
-# For C/C++ Linter
-cppcheck
-
-# For C/C++ AST Parser
-clang
-
-# For running the Java .jar linter
-default-jre
